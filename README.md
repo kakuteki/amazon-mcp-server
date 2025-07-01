@@ -6,7 +6,7 @@ This is a Model Context Protocol (MCP) server for scraping Amazon products and s
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yourusername/amazon-mcp-server.git
+   git clone https://github.com/r123singh/amazon-mcp-server.git
    ```
 2. **Navigate to the project directory:**
    ```bash
