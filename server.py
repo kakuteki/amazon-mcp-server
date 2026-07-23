@@ -1,6 +1,7 @@
 # This is amazon products scraper mcp server
 # Build a scraper that can scrape amazon products
 # The scraper should be able to scrape the product name, price, and image
+import asyncio
 import httpx
 from mcp.server.fastmcp import FastMCP
 import re
@@ -33,24 +34,75 @@ mcp = FastMCP(
 # BASE_URL = "https://api.trello.com/1"
 # API_KEY = os.getenv("TRELLO_API_KEY")
 # API_TOKEN = os.getenv("TRELLO_API_TOKEN")
-BASE_URL = "https://www.amazon.com"
+BASE_URL = "https://www.amazon.co.jp"
 
 # Helper functions
+BROWSER_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Cache-Control': 'max-age=0',
+    'Device-Memory': '8',
+}
+
+
+class CaptchaBlocked(Exception):
+    """Raised when Amazon serves a bot-check / captcha page instead of content."""
+
+
+def _looks_like_captcha(html: str) -> bool:
+    low = html.lower()
+    return (
+        len(html) < 8000
+        and ('captcha' in low or 'api-services-support@amazon' in low
+             or 'to discuss automated access' in low)
+    )
+
+
 async def fetch_amazon_page(url: str) -> str:
-    """Helper function to fetch Amazon product page"""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-    }
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers, timeout=15.0)
-        response.raise_for_status()
-        return response.text
+    """Helper function to fetch an Amazon page.
+
+    Amazon returns 503 to bare requests and intermittently serves a captcha
+    page (HTTP 200) to traffic it thinks is automated. We warm up a session on
+    the homepage to pick up cookies, retry on 503, and if we land on a captcha
+    page we back off and retry with a fresh session a few times.
+    """
+    for session_attempt in range(4):
+        async with httpx.AsyncClient(follow_redirects=True, headers=BROWSER_HEADERS, timeout=20.0) as client:
+            # Warm up: get session cookies from the homepage first.
+            try:
+                await client.get(BASE_URL)
+            except Exception:
+                pass
+
+            html = None
+            for attempt in range(3):
+                headers = {'Referer': BASE_URL + '/'} if attempt else {}
+                response = await client.get(url, headers=headers)
+                if response.status_code == 200:
+                    html = response.text
+                    break
+                await asyncio.sleep(1.0 + attempt)
+
+            if html is not None and not _looks_like_captcha(html):
+                return html
+
+        # Landed on captcha or non-200; back off with a fresh session.
+        await asyncio.sleep(2.0 + 2.0 * session_attempt)
+
+    raise CaptchaBlocked(
+        "Amazon returned a bot-check (captcha) page. Try again in a little while."
+    )
 
 def clean_price(price_text: str) -> str:
     """Clean and extract price from text"""
@@ -60,7 +112,7 @@ def clean_price(price_text: str) -> str:
     # Remove extra whitespace and common price prefixes
     cleaned = re.sub(r'[^\d.,]', '', price_text.strip())
     if cleaned:
-        return f"${cleaned}"
+        return f"￥{cleaned}"
     return "Price not available"
 
 def extract_product_data(html_content: str, url: str) -> dict:
@@ -215,14 +267,20 @@ def extract_search_results(html_content: str, max_results: int) -> list:
             if name_elem:
                 product['name'] = name_elem.get_text().strip()
             
-            # Extract product URL
-            url_elem = container.select_one('a')
-            if url_elem:
-                product_url = url_elem.get('href')
-                if product_url:
-                    if product_url.startswith('/'):
-                        product_url = 'https://www.amazon.com' + product_url
-                    product['url'] = product_url
+            # Extract product URL.
+            # Prefer the ASIN (data-asin) to build a clean /dp/ URL instead of
+            # the noisy sponsored-click redirect links.
+            asin = container.get('data-asin')
+            if asin:
+                product['url'] = f"{BASE_URL}/dp/{asin}"
+            else:
+                url_elem = container.select_one('a')
+                if url_elem:
+                    product_url = url_elem.get('href')
+                    if product_url:
+                        if product_url.startswith('/'):
+                            product_url = BASE_URL + product_url
+                        product['url'] = product_url
             
             # Extract price
             price_elem = container.select_one('.a-price-whole')
@@ -298,7 +356,9 @@ async def scrape_product(product_url: str) -> str:
         
         # Format the result
         return format_product_details(product_data)
-        
+
+    except CaptchaBlocked as e:
+        return f"Error: {e}"
     except httpx.HTTPStatusError as e:
         return f"HTTP Error: {e.response.status_code} - {e.response.reason_phrase}"
     except httpx.RequestError as e:
@@ -311,7 +371,7 @@ async def search_products(query: str, max_results: int = 5) -> str:
     """Search for products on Amazon and return results"""
     try:
         # Construct search URL
-        search_url = f"https://www.amazon.com/s?k={query.replace(' ', '+')}"
+        search_url = f"{BASE_URL}/s?k={query.replace(' ', '+')}"
         
         # Fetch search results page
         html_content = await fetch_amazon_page(search_url)
@@ -321,7 +381,9 @@ async def search_products(query: str, max_results: int = 5) -> str:
         
         # Format the results
         return format_search_results(products, query)
-        
+
+    except CaptchaBlocked as e:
+        return f"Error: {e}"
     except Exception as e:
         return f"Error searching products: {str(e)}"
 

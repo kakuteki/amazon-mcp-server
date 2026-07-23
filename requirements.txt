@@ -1,3 +1,5 @@
 mcp
 mcp[cli]
 beautifulsoup4
+httpx
+lxml

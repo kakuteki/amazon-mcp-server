@@ -1,11 +1,8 @@
 {
   "mcpServers": {
-    "trello": {
-      "command": "python",
-      "args": ["-m", "mcp.server.fastmcp", "server.py"],
-      "env": {
-        "PYTHONPATH": "."
-      }
+    "amazon-jp": {
+      "command": "/path/to/amazon-mcp-server/.venv/bin/python",
+      "args": ["/path/to/amazon-mcp-server/server.py"]
     }
   }
-} 
+}
