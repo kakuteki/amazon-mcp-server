@@ -4,6 +4,7 @@
 import asyncio
 import json
 import re
+import sys
 import time
 from datetime import date, datetime, timedelta
 
@@ -1240,5 +1241,8 @@ async def search_products(
 
 
 if __name__ == "__main__":
-    print("Starting Amazon Products MCP server...")
-    mcp.run(transport = "stdio") 
+    # stdout IS the protocol channel for stdio transport. Anything printed here
+    # lands in the middle of the JSON-RPC stream and the client drops the
+    # connection, so status messages must go to stderr.
+    print("Starting Amazon Products MCP server...", file=sys.stderr)
+    mcp.run(transport="stdio") 
