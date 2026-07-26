@@ -331,9 +331,21 @@ async def _set_delivery_postal(client: httpx.AsyncClient, postal_code: str,
             return False
         # Verify rather than trust the status code: the endpoint answers 200
         # even when it ignores the request.
+        #
+        # Check the address widget specifically. Searching the whole page for
+        # the digits matches by coincidence — a megabyte of HTML stripped to
+        # digits contains almost any 7-digit sequence — which made this report
+        # success every time and silenced the "could not apply" warning.
         again = await client.get(referer, headers={'Referer': BASE_URL + '/'})
+        soup = BeautifulSoup(again.text, 'html.parser')
+        shown = ''
+        for sel in ('#contextualIngressPtLabel_deliveryShortLine',
+                    '#glow-ingress-line2', '#deliveryBlockContainer'):
+            elem = soup.select_one(sel)
+            if elem:
+                shown += ' ' + elem.get_text()
         digits = re.sub(r'\D', '', postal_code)
-        return digits and digits in re.sub(r'\D', '', again.text[:400_000])
+        return bool(digits) and digits in re.sub(r'\D', '', shown)
     except Exception:
         return False
 
