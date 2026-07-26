@@ -1081,7 +1081,7 @@ async def compare_products(product_urls: list[str], postal_code: str = "") -> st
     if not rows:
         return "ERROR: could not fetch any product\n" + "\n".join(errors)
 
-    out = "# Comparison\n\n"
+    out = postal_warning(postal_code) + "# Comparison\n\n"
     out += "| # | 商品 | 価格 | 送料 | 合計 | 到着 | 発送/販売 | 在庫 |\n"
     out += "|---|---|---:|---:|---:|---|---|---|\n"
     for i, p in enumerate(rows, 1):
